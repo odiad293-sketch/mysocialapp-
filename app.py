@@ -512,3 +512,69 @@ loadUsers();
 </html>
 """
 
+# =================== ADMIN HTML ===================
+ADMIN_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+<title>Admin Panel - Chatternet</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+body { margin:0; font-family:Arial; background:#f0f2f5; }
+header { background:#1877f2; color:white; padding:15px; font-size:20px; text-align:center; position:sticky; top:0; }
+.container { max-width:900px; margin:20px auto; }
+.user-table { width:100%; border-collapse:collapse; background:white; border-radius:10px; overflow:hidden; box-shadow:0 2px 8px rgba(0,0,0,0.1); }
+.user-table th, .user-table td { padding:12px; border-bottom:1px solid #eee; text-align:left; }
+.user-table th { background:#f5f5f5; }
+.user-table tr:hover { background:#f0f8ff; }
+button { padding:6px 12px; border:none; border-radius:5px; cursor:pointer; margin-right:5px; }
+.ban-btn { background:#e74c3c; color:white; }
+.logo-btn { background:#27ae60; color:white; }
+.top-buttons { margin-bottom:15px; }
+input[type="file"] { margin-top:10px; }
+</style>
+</head>
+<body>
+<header>Admin Panel - Chatternet</header>
+<div class="container">
+<div class="top-buttons">
+    <button onclick="window.location='/dashboard'">Back to Dashboard</button>
+</div>
+
+<h2>Manage Users</h2>
+<table class="user-table">
+<tr><th>Username</th><th>Email</th><th>Status</th><th>Actions</th></tr>
+{% for u in users %}
+<tr>
+<td>{{u.username}}</td>
+<td>{{u.email}}</td>
+<td>{{'Admin' if u.is_admin else 'User'}}</td>
+<td>
+{% if not u.is_admin %}
+<form method="POST" action="/ban_user" style="display:inline;">
+<input type="hidden" name="user_id" value="{{u.id}}">
+<button type="submit" class="ban-btn">Ban</button>
+</form>
+{% endif %}
+</td>
+</tr>
+{% endfor %}
+</table>
+
+<h2>Upload Custom Logo</h2>
+<form method="POST" action="/upload_logo" enctype="multipart/form-data">
+<input type="file" name="logo" accept="image/*" required>
+<button type="submit" class="logo-btn">Upload Logo</button>
+</form>
+
+<h2>Message Notifications</h2>
+<ul>
+{% for msg in notifications %}
+<li>{{msg}}</li>
+{% endfor %}
+</ul>
+
+</div>
+</body>
+</html>
+"""
