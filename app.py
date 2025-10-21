@@ -495,3 +495,167 @@ socket.on('receive_message', data=>{
 </body>
 </html>
 """
+# ================= PART 3 ===================
+# ================= UPLOADS & LOGO ===================
+
+from werkzeug.utils import secure_filename
+
+UPLOAD_FOLDER = 'static/uploads'
+LOGO_FOLDER = 'static/logo'
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
+
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['LOGO_FOLDER'] = LOGO_FOLDER
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(LOGO_FOLDER, exist_ok=True)
+
+# Model for Logo
+class Logo(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    filename = db.Column(db.String(100), nullable=False)
+
+# Modify Post model to include image
+if not hasattr(Post, 'image'):
+    Post.image = db.Column(db.String(100), nullable=True)
+
+with app.app_context():
+    db.create_all()
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+@app.route('/post', methods=['POST'])
+def create_post():
+    if 'user' not in session:
+        return redirect('/login')
+    content = request.form.get('content')
+    file = request.files.get('image')
+    filename = None
+    if file and allowed_file(file.filename):
+        filename = secure_filename(file.filename)
+        file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+    new_post = Post(author=session['user'], content=content, image=filename)
+    db.session.add(new_post)
+    db.session.commit()
+    return redirect('/dashboard')
+
+@app.route('/upload_logo', methods=['GET', 'POST'])
+def upload_logo():
+    if 'user' not in session:
+        return redirect('/login')
+    current_user = User.query.filter_by(username=session['user']).first()
+    if not current_user.is_admin:
+        return "Access denied."
+    if request.method == 'POST':
+        file = request.files.get('logo')
+        if file and allowed_file(file.filename):
+            filename = secure_filename(file.filename)
+            file.save(os.path.join(app.config['LOGO_FOLDER'], filename))
+            # Save in DB
+            logo = Logo.query.first()
+            if not logo:
+                logo = Logo(filename=filename)
+                db.session.add(logo)
+            else:
+                logo.filename = filename
+            db.session.commit()
+            return redirect('/dashboard')
+    return render_template_string(LOGO_UPLOAD_HTML)
+
+# ================= LOGO DISPLAY ===================
+@app.route('/logo')
+def display_logo():
+    logo = Logo.query.first()
+    if logo:
+        return f'<img src="{url_for("static", filename="logo/" + logo.filename)}" style="width:100%;">'
+    return "No logo uploaded."
+
+LOGO_UPLOAD_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+<title>Upload Logo</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+body{margin:0; font-family:Arial; background:#f0f2f5;}
+header{background:#1877f2; color:white; padding:15px; text-align:center; font-size:20px;}
+.container{max-width:500px; margin:20px auto; padding:10px; background:white; border-radius:10px; box-shadow:0 0 5px rgba(0,0,0,0.2);}
+button{background:#1877f2; color:white; border:none; padding:10px 15px; border-radius:5px; cursor:pointer;}
+button:hover{opacity:0.9;}
+</style>
+</head>
+<body>
+<header>Upload Logo</header>
+<div class="container">
+<form method="POST" enctype="multipart/form-data">
+<input type="file" name="logo" required><br><br>
+<button>Upload</button>
+</form>
+<p><a href="/dashboard">Back to Dashboard</a></p>
+</div>
+</body>
+</html>
+"""
+
+# ================= FULL MOBILE SCREEN SUPPORT ===================
+@app.after_request
+def add_header(response):
+    response.headers['X-UA-Compatible'] = 'IE=Edge,chrome=1'
+    response.headers['Cache-Control'] = 'public, max-age=0'
+    return response
+
+# ================= EMAIL/PHONE VALIDATION FOR SIGNUP ===================
+import re
+
+EMAIL_REGEX = r'^[\w\.-]+@[\w\.-]+\.\w+$'
+PHONE_REGEX = r'^\+?\d{7,15}$'
+
+@app.route('/signup', methods=['GET', 'POST'])
+def signup_page():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        email_or_phone = request.form['email_or_phone']
+        if User.query.filter_by(username=username).first():
+            return "Username already exists."
+        # Validate email or phone
+        if not (re.match(EMAIL_REGEX, email_or_phone) or re.match(PHONE_REGEX, email_or_phone)):
+            return "Invalid email or phone number."
+        is_admin = False
+        if User.query.count() == 0:
+            is_admin = True  # first user becomes admin
+        new_user = User(username=username, password=password, email_or_phone=email_or_phone, is_admin=is_admin)
+        db.session.add(new_user)
+        db.session.commit()
+        return redirect('/login')
+    return render_template_string(SIGNUP_EMAIL_HTML)
+
+SIGNUP_EMAIL_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+<title>Signup</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+body{margin:0; font-family:Arial; background:#f0f2f5;}
+.container{max-width:400px; margin:100px auto; padding:20px; background:white; border-radius:10px; box-shadow:0 0 5px rgba(0,0,0,0.2);}
+input{display:block; margin:10px auto; padding:10px; width:90%;}
+button{background:#1877f2; color:white; border:none; padding:10px 15px; border-radius:5px; cursor:pointer;}
+button:hover{opacity:0.9;}
+a{color:#1877f2; text-decoration:none;}
+</style>
+</head>
+<body>
+<div class="container">
+<h2>Create your account</h2>
+<form method="POST">
+<input name="username" placeholder="Username" required>
+<input type="password" name="password" placeholder="Password" required>
+<input name="email_or_phone" placeholder="Email or Phone" required>
+<button>Sign Up</button>
+</form>
+<p><a href="/login">Already have an account?</a></p>
+</div>
+</body>
+</html>
+"""
