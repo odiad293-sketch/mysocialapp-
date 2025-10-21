@@ -77,8 +77,6 @@ login_html = """
 """
 
 register_html = """
-{% extends base %}
-{% block body %}
 <div class="card" style="width:300px;text-align:center;">
   <h3>Create ChatterNet Account</h3>
   <form method="POST">
@@ -89,12 +87,9 @@ register_html = """
   <p>Already have an account? <a href="{{url_for('login')}}">Login</a></p>
   {% if msg %}<p style="color:red;">{{msg}}</p>{% endif %}
 </div>
-{% endblock %}
 """
 
 home_html = """
-{% extends base %}
-{% block body %}
 <div style="width:600px;">
   <div class="card">
     <form method="POST" action="{{url_for('post')}}">
@@ -112,7 +107,6 @@ home_html = """
   <br>
   {% endfor %}
 </div>
-{% endblock %}
 """
 
 # ---------- Routes ----------
