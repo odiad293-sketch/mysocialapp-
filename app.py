@@ -1,165 +1,214 @@
-from flask import Flask, request, redirect, url_for, g
+from flask import Flask, render_template_string, request, redirect, url_for, session, jsonify
 import sqlite3, os
 
 app = Flask(__name__)
+app.secret_key = "mysecretkey"
 
-DB_NAME = "mysocial.db"
-
-# ------------------------------------
-# Database Setup
-# ------------------------------------
-def get_db():
-    if 'db' not in g:
-        g.db = sqlite3.connect(DB_NAME)
-        g.db.row_factory = sqlite3.Row
-    return g.db
-
-@app.teardown_appcontext
-def close_db(error):
-    db = g.pop('db', None)
-    if db:
-        db.close()
+# ===================== DATABASE =====================
+DB_NAME = "social.db"
 
 def init_db():
-    db = get_db()
-    db.executescript('''
-    CREATE TABLE IF NOT EXISTS users (
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE NOT NULL,
-        password TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS posts (
+        username TEXT UNIQUE,
+        password TEXT,
+        photo TEXT
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS posts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER,
         content TEXT,
+        likes INTEGER DEFAULT 0,
         FOREIGN KEY(user_id) REFERENCES users(id)
-    );
-    ''')
-    db.commit()
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS comments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        post_id INTEGER,
+        user_id INTEGER,
+        text TEXT,
+        FOREIGN KEY(post_id) REFERENCES posts(id),
+        FOREIGN KEY(user_id) REFERENCES users(id)
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS follows (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        follower_id INTEGER,
+        following_id INTEGER
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sender_id INTEGER,
+        receiver_id INTEGER,
+        message TEXT
+    )""")
+    conn.commit()
+    conn.close()
 
-# Initialize the database
-with app.app_context():
-    init_db()
+init_db()
 
-# ------------------------------------
-# Routes
-# ------------------------------------
+# ===================== ROUTES =====================
 
-@app.route('/')
+@app.route("/")
 def home():
-    return """
-    <style>
-      body {font-family: Arial; background:#f0f2f5; text-align:center;}
-      .btn {display:inline-block; background:#1877f2; color:#fff; padding:10px 20px;
-            margin:5px; border-radius:8px; text-decoration:none;}
-    </style>
-    <h1 style='color:#1877f2;'>MySocial Network</h1>
-    <a href='/register' class='btn'>Register</a>
-    <a href='/login' class='btn'>Login</a>
-    """
+    if "user" not in session:
+        return redirect("/login")
+    user = session["user"]
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT posts.id, users.username, posts.content, posts.likes FROM posts JOIN users ON posts.user_id = users.id ORDER BY posts.id DESC")
+    posts = c.fetchall()
+    conn.close()
+    return render_template_string(HOME_HTML, user=user, posts=posts)
 
-# ------------------------------------
-# Registration
-# ------------------------------------
-@app.route('/register', methods=['GET', 'POST'])
+@app.route("/register", methods=["GET", "POST"])
 def register():
-    if request.method == 'POST':
-        username = request.form.get('username', '').strip()
-        password = request.form.get('password', '').strip()
-        db = get_db()
+    if request.method == "POST":
+        username = request.form["username"]
+        password = request.form["password"]
+        conn = sqlite3.connect(DB_NAME)
+        c = conn.cursor()
         try:
-            db.execute("INSERT INTO users (username, password) VALUES (?, ?)", (username, password))
-            db.commit()
-            return f"<h3>✅ Account created for {username}!</h3><a href='/login'>Go to Login</a>"
+            c.execute("INSERT INTO users (username, password) VALUES (?,?)", (username, password))
+            conn.commit()
         except:
-            return "<h3>❌ Username already exists.</h3><a href='/register'>Try again</a>"
+            return "Username already taken."
+        conn.close()
+        return redirect("/login")
+    return render_template_string(REGISTER_HTML)
 
-    return """
-    <h2>Create your account</h2>
-    <form method='POST'>
-      <input type='text' name='username' placeholder='Username' required><br><br>
-      <input type='password' name='password' placeholder='Password' required><br><br>
-      <button type='submit'>Register</button>
-    </form>
-    """
-
-# ------------------------------------
-# Login
-# ------------------------------------
-@app.route('/login', methods=['GET', 'POST'])
+@app.route("/login", methods=["GET", "POST"])
 def login():
-    if request.method == 'POST':
-        username = request.form.get('username', '').strip()
-        password = request.form.get('password', '').strip()
-
-        db = get_db()
-        user = db.execute("SELECT * FROM users WHERE username=? AND password=?", (username, password)).fetchone()
-
+    if request.method == "POST":
+        username = request.form["username"]
+        password = request.form["password"]
+        conn = sqlite3.connect(DB_NAME)
+        c = conn.cursor()
+        c.execute("SELECT * FROM users WHERE username=? AND password=?", (username, password))
+        user = c.fetchone()
+        conn.close()
         if user:
-            return redirect(url_for('dashboard', user=username))
+            session["user"] = username
+            return redirect("/")
         else:
-            return "<h3>❌ Invalid credentials</h3><a href='/login'>Try again</a>"
+            return "Login failed"
+    return render_template_string(LOGIN_HTML)
 
-    return """
-    <h2>Login</h2>
-    <form method='POST'>
-      <input type='text' name='username' placeholder='Username' required><br><br>
-      <input type='password' name='password' placeholder='Password' required><br><br>
-      <button type='submit'>Login</button>
+@app.route("/logout")
+def logout():
+    session.pop("user", None)
+    return redirect("/login")
+
+@app.route("/post", methods=["POST"])
+def post():
+    if "user" not in session:
+        return redirect("/login")
+    content = request.form["content"]
+    username = session["user"]
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT id FROM users WHERE username=?", (username,))
+    user_id = c.fetchone()[0]
+    c.execute("INSERT INTO posts (user_id, content) VALUES (?,?)", (user_id, content))
+    conn.commit()
+    conn.close()
+    return redirect("/")
+
+@app.route("/like/<int:post_id>")
+def like(post_id):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("UPDATE posts SET likes = likes + 1 WHERE id=?", (post_id,))
+    conn.commit()
+    conn.close()
+    return redirect("/")
+
+@app.route("/comment/<int:post_id>", methods=["POST"])
+def comment(post_id):
+    text = request.form["text"]
+    username = session["user"]
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT id FROM users WHERE username=?", (username,))
+    user_id = c.fetchone()[0]
+    c.execute("INSERT INTO comments (post_id, user_id, text) VALUES (?,?,?)", (post_id, user_id, text))
+    conn.commit()
+    conn.close()
+    return redirect("/")
+
+@app.route("/admin")
+def admin():
+    if session.get("user") != "admin":
+        return "Access denied."
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT * FROM users")
+    users = c.fetchall()
+    c.execute("SELECT * FROM posts")
+    posts = c.fetchall()
+    conn.close()
+    return render_template_string(ADMIN_HTML, users=users, posts=posts)
+
+# ===================== HTML =====================
+
+LOGIN_HTML = """
+<h2>Login</h2>
+<form method="post">
+  <input name="username" placeholder="Username"><br>
+  <input name="password" type="password" placeholder="Password"><br>
+  <button>Login</button>
+</form>
+<a href="/register">Register</a>
+"""
+
+REGISTER_HTML = """
+<h2>Register</h2>
+<form method="post">
+  <input name="username" placeholder="Username"><br>
+  <input name="password" type="password" placeholder="Password"><br>
+  <button>Register</button>
+</form>
+"""
+
+HOME_HTML = """
+<h2>Welcome {{user}}</h2>
+<form method="post" action="/post">
+  <textarea name="content" placeholder="What's on your mind?" style="width:100%;height:60px;"></textarea>
+  <button>Post</button>
+</form>
+<hr>
+{% for post in posts %}
+  <div>
+    <b>{{post[1]}}</b>: {{post[2]}} <br>
+    ❤️ {{post[3]}} <a href="/like/{{post[0]}}">Like</a>
+    <form method="post" action="/comment/{{post[0]}}">
+      <input name="text" placeholder="Comment...">
     </form>
-    """
+  </div>
+  <hr>
+{% endfor %}
+<a href="/logout">Logout</a>
+{% if user == "admin" %}
+  <a href="/admin">Admin Dashboard</a>
+{% endif %}
+"""
 
-# ------------------------------------
-# Dashboard
-# ------------------------------------
-@app.route('/dashboard/<user>', methods=['GET', 'POST'])
-def dashboard(user):
-    db = get_db()
-    user_row = db.execute("SELECT id FROM users WHERE username=?", (user,)).fetchone()
-    if not user_row:
-        return "<h3>User not found</h3>"
+ADMIN_HTML = """
+<h2>Admin Dashboard</h2>
+<h3>Users</h3>
+<ul>
+{% for u in users %}
+  <li>{{u[1]}}</li>
+{% endfor %}
+</ul>
+<h3>Posts</h3>
+<ul>
+{% for p in posts %}
+  <li>{{p[2]}}</li>
+{% endfor %}
+</ul>
+<a href="/">Back</a>
+"""
 
-    if request.method == 'POST':
-        content = request.form.get('content', '').strip()
-        if content:
-            db.execute("INSERT INTO posts (user_id, content) VALUES (?, ?)", (user_row['id'], content))
-            db.commit()
-
-    posts = db.execute("""
-        SELECT p.content, u.username FROM posts p
-        JOIN users u ON p.user_id = u.id
-        ORDER BY p.id DESC
-    """).fetchall()
-
-    html = f"""
-    <style>
-      body {{ font-family: Arial; background:#f0f2f5; text-align:center; }}
-      .nav {{ background:#fff; padding:10px; border-bottom:1px solid #ccc; }}
-      .btn {{ background:#1877f2; color:white; border:none; padding:8px 20px; border-radius:5px; margin:5px; }}
-      textarea {{ width:90%; max-width:400px; height:60px; border-radius:8px; border:1px solid #ccc; padding:5px; }}
-      .post {{ background:#fff; border-radius:10px; padding:10px; margin:10px auto; width:90%; max-width:400px; box-shadow:0 0 4px #ccc; text-align:left; }}
-    </style>
-    <div class='nav'>
-      <b>Welcome, {user}</b><br>
-      <a href='/' class='btn'>Logout</a>
-    </div>
-    <form method='POST'>
-      <textarea name='content' placeholder="What's on your mind?"></textarea><br>
-      <button type='submit' class='btn'>Post</button>
-    </form>
-    <hr>
-    """
-
-    for post in posts:
-        html += f"<div class='post'><b>{post['username']}</b><br>{post['content']}</div>"
-
-    return html
-
-# ------------------------------------
-# Run app
-# ------------------------------------
-if __name__ == '__main__':
-    if not os.path.exists(DB_NAME):
-        with app.app_context():
-            init_db()
-    app.run(host='0.0.0.0', port=10000, debug=True)
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
