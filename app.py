@@ -41,25 +41,20 @@ def register():
         return redirect(url_for('login'))
     return render_template('register.html')
 
-@app.route('/login', methods=["GET", "POST"])
+@app.route('/login', methods=['GET', 'POST'])
 def login():
-    if request.method == "POST":
-        username = request.form["username"]
-        password = request.form["password"]
-        conn = get_db_connection()
-        user = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
-        conn.close()
-
-        if user and check_password_hash(user["password"], password):
-            session["user_id"] = user["id"]
-            session["username"] = user["username"]
-            return redirect(url_for("home"))
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        
+        # Simple example check
+        if username == "admin" and password == "1234":
+            return "Welcome!"
         else:
-            flash("Invalid credentials.")
-            return render_template("login.html")
+            return render_template('login.html', error="Invalid credentials")
+    
+    return render_template('login.html')
 
-    # 👇 This handles GET requests — so users can see the login page
-    return render_template("login.html")
 @app.route('/logout')
 def logout():
     session.clear()
