@@ -41,22 +41,18 @@ def register():
         return redirect(url_for('login'))
     return render_template('register.html')
 
-@app.route('/login', methods=["GET", "POST"])
+@app.route('/login', methods=['GET', 'POST'])
 def login():
-    if request.method == "POST":
-        username = request.form['username']
-        password = request.form['password']
-        conn = get_db_connection()
-        user = conn.execute('SELECT * FROM users WHERE username = ?', (username,)).fetchone()
-        conn.close()
-        if user and check_password_hash(user["password"], password):
-            session["user_id"] = user["id"]
-            session["username"] = user["username"]
-            return redirect(url_for('home'))
-        else:
-            flash("Invalid credentials.")
-    return render_template('login.html')
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
 
+        if username == "admin" and password == "1234":
+            return "Login successful"
+        else:
+            return "Invalid username or password", 401
+    else:
+        return "Please log in using POST request."
 @app.route('/logout')
 def logout():
     session.clear()
