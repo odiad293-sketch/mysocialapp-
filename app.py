@@ -64,8 +64,6 @@ a{text-decoration:none;color:#1877f2;}
 """
 
 login_html = """
-{% extends base %}
-{% block body %}
 <div class="card" style="width:300px;text-align:center;">
   <h3>Login to ChatterNet</h3>
   <form method="POST">
@@ -76,7 +74,6 @@ login_html = """
   <p>or <a href="{{url_for('register')}}">Create account</a></p>
   {% if msg %}<p style="color:red;">{{msg}}</p>{% endif %}
 </div>
-{% endblock %}
 """
 
 register_html = """
