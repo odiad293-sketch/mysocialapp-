@@ -1,3 +1,7 @@
+from flask import Flask, render_template, request
+import os
+
+app = Flask(__name__, template_folder='templates')
 from flask import Flask, render_template, request, redirect, url_for, session, flash
 import sqlite3, os
 from werkzeug.security import generate_password_hash, check_password_hash
