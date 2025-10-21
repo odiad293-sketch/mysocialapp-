@@ -3,8 +3,8 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_socketio import SocketIO, emit, join_room
 from datetime import datetime
 import os
+import time
 
-# ================= APP CONFIG =================
 app = Flask(__name__)
 app.secret_key = "chatternet_secret_key"
 app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///chatternet.db"
@@ -12,11 +12,13 @@ app.config['UPLOAD_FOLDER'] = "static"
 db = SQLAlchemy(app)
 socketio = SocketIO(app)
 
-# ================= DATABASE MODELS ==============
+# ================= DATABASE MODELS =================
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(50), unique=True, nullable=False)
     password = db.Column(db.String(50), nullable=False)
+    email = db.Column(db.String(100), unique=True, nullable=True)
+    phone = db.Column(db.String(20), unique=True, nullable=True)
     is_admin = db.Column(db.Boolean, default=False)
     banned = db.Column(db.Boolean, default=False)
 
@@ -48,12 +50,18 @@ with app.app_context():
     if not os.path.exists('static'):
         os.makedirs('static')
 
-# ================= ROUTES =======================
+# ================= ROUTES =========================
 @app.route('/')
+def splash():
+    logo = Logo.query.first()
+    return render_template_string(SPLASH_HTML, logo=logo)
+
+@app.route('/dashboard')
 def home():
+    user = session.get("user")
+    if not user: return redirect('/login')
     logo = Logo.query.first()
     posts = Post.query.order_by(Post.timestamp.desc()).all()
-    user = session.get("user")
     return render_template_string(HOME_HTML, user=user, posts=posts, logo=logo)
 
 @app.route('/login', methods=['GET','POST'])
@@ -66,7 +74,7 @@ def login():
             if user.banned:
                 return "You are banned."
             session['user'] = user.username
-            return redirect('/')
+            return redirect('/dashboard')
         return "Invalid credentials."
     return render_template_string(LOGIN_HTML)
 
@@ -75,10 +83,21 @@ def signup():
     if request.method=='POST':
         username = request.form['username']
         password = request.form['password']
+        email = request.form.get('email')
+        phone = request.form.get('phone')
+
+        if not email and not phone:
+            return "You must provide either email or phone."
+
         if User.query.filter_by(username=username).first():
             return "Username already exists."
+        if email and User.query.filter_by(email=email).first():
+            return "Email already in use."
+        if phone and User.query.filter_by(phone=phone).first():
+            return "Phone number already in use."
+
         is_first = (User.query.count()==0)
-        new_user = User(username=username, password=password, is_admin=is_first)
+        new_user = User(username=username, password=password, email=email, phone=phone, is_admin=is_first)
         db.session.add(new_user)
         db.session.commit()
         return redirect('/login')
@@ -102,7 +121,7 @@ def post():
     new_post = Post(author=user, content=content, image=filename)
     db.session.add(new_post)
     db.session.commit()
-    return redirect('/')
+    return redirect('/dashboard')
 
 @app.route('/profile/<username>')
 def profile(username):
@@ -198,154 +217,150 @@ def handle_message(data):
     emit('receive_message', {'sender':sender,'text':text,'time':msg.timestamp.strftime("%H:%M")}, room=receiver)
     emit('receive_message', {'sender':sender,'text':text,'time':msg.timestamp.strftime("%H:%M")}, room=sender)
 
-# ================= HTML TEMPLATES =================
-# ---- LOGIN ----
-LOGIN_HTML = """
-<!DOCTYPE html>
-<html><head><title>Login</title></head>
-<body style="text-align:center; background:#f0f2f5;">
+# ================= HTML TEMPLATES ==================
+SPLASH_HTML = """<!DOCTYPE html>
+<html><head><title>Welcome</title>
+<script>
+setTimeout(function(){ window.location.href='/dashboard'; }, 3000);
+</script>
+</head><body>
+{% if logo %}<img src="/static/{{logo.filename}}" width="200">{% else %}<h1>Welcome to Chatternet</h1>{% endif %}
+</body></html>
+"""
+
+LOGIN_HTML = """<!DOCTYPE html>
+<html><head><title>Login</title></head><body>
 <h2>Login</h2>
 <form method="POST">
 <input name="username" placeholder="Username" required><br>
-<input type="password" name="password" placeholder="Password" required><br>
+<input name="password" type="password" placeholder="Password" required><br>
 <button>Login</button>
+<p><a href="/signup">Sign up</a></p>
 </form>
-<p>Don't have an account? <a href="/signup">Sign up</a></p>
 </body></html>
 """
 
-# ---- SIGNUP ----
-SIGNUP_HTML = """
-<!DOCTYPE html>
-<html><head><title>Signup</title></head>
-<body style="text-align:center; background:#f0f2f5;">
-<h2>Sign Up</h2>
+SIGNUP_HTML = """<!DOCTYPE html>
+<html><head><title>Signup</title></head><body>
+<h2>Signup</h2>
 <form method="POST">
 <input name="username" placeholder="Username" required><br>
-<input type="password" name="password" placeholder="Password" required><br>
+<input name="password" type="password" placeholder="Password" required><br>
+<input name="email" placeholder="Email (optional)"><br>
+<input name="phone" placeholder="Phone (optional)"><br>
 <button>Sign Up</button>
+<p><a href="/login">Already have an account?</a></p>
 </form>
-<p>Already have account? <a href="/login">Login</a></p>
 </body></html>
 """
 
-# ---- HOME / DASHBOARD ----
-HOME_HTML = """
-<!DOCTYPE html>
-<html>
-<head>
-<title>Chatternet</title>
-<style>
-body { font-family: Arial; background:#e9ebee; margin:0;}
-header { background:#1877f2; color:white; padding:10px; font-size:20px; text-align:center; }
-.feed { max-width:500px; margin:20px auto; background:white; border-radius:10px; padding:10px; }
-.post { border-bottom:1px solid #ccc; padding:10px; }
-.post img { max-width:100%; height:auto; margin-top:5px; }
-.nav-btn { padding:5px 10px; margin:2px; background:#1877f2; color:white; border:none; border-radius:5px; }
-</style>
-</head>
-<body>
-<header>
-{% if logo %}<img src="/static/{{logo.filename}}" width="50" height="50">{% endif %}
-Chatternet
-</header>
-{% if user %}
-<div style="text-align:center; margin:10px;">
-<button onclick="window.location.href='/messenger'" class="nav-btn">Messenger</button>
-<button onclick="window.location.href='/friends'" class="nav-btn">Friends</button>
-<button onclick="window.location.href='/profile/{{user}}'" class="nav-btn">My Profile</button>
-{% if user=='{{user}}' and users|selectattr('is_admin')|list %}<button onclick="window.location.href='/admin'" class="nav-btn">Admin</button>{% endif %}
-<a href="/logout" class="nav-btn">Logout</a>
-</div>
-<div class="feed">
-<h3>Post something</h3>
+HOME_HTML = """<!DOCTYPE html>
+<html><head><title>Dashboard</title></head><body>
+{% if logo %}<img src="/static/{{logo.filename}}" width="200">{% endif %}
+<h2>Welcome {{user}}</h2>
+<a href="/logout">Logout</a> | <a href="/messenger">Messenger</a> | <a href="/friends">Friends</a> | <a href="/profile/{{user}}">Profile</a> {% if user==User.query.filter_by(is_admin=True).first().username %}| <a href="/admin">Admin</a>{% endif %}
+<h3>Create Post</h3>
 <form method="POST" action="/post" enctype="multipart/form-data">
-<textarea name="content" style="width:100%;height:60px;" placeholder="What's on your mind?"></textarea><br>
+<textarea name="content" placeholder="Post content"></textarea><br>
 <input type="file" name="image"><br>
 <button>Post</button>
 </form>
-</div>
+<h3>Posts</h3>
 {% for post in posts %}
-<div class="feed post">
-<b>{{post.author}}</b>: {{post.content}} <br>
-{% if post.image %}<img src="/static/{{post.image}}">{% endif %}
-<small>{{post.timestamp.strftime('%Y-%m-%d %H:%M')}}</small>
-</div>
+<div><b>{{post.author}}</b>: {{post.content}} {% if post.image %}<br><img src="/static/{{post.image}}" width="100">{% endif %} <small>{{post.timestamp}}</small></div>
 {% endfor %}
-{% else %}
-<p style="text-align:center;">Please <a href="/login">login</a> to see the content.</p>
-{% endif %}
-</body>
-</html>
+</body></html>
 """
 
-# ---- PROFILE HTML ----
-PROFILE_HTML = """
-<!DOCTYPE html>
-<html>
-<head><title>{{profile_user.username}}'s Profile</title></head>
-<body style="text-align:center; background:#f0f2f5;">
+PROFILE_HTML = """<!DOCTYPE html>
+<html><head><title>{{profile_user.username}}</title></head><body>
 <h2>{{profile_user.username}}'s Profile</h2>
-<a href="/">Dashboard</a> | <a href="/messenger">Messenger</a> | <a href="/friends">Friends</a>
+<a href="/dashboard">Back</a>
+<h3>Posts</h3>
 {% for post in posts %}
-<div style="border:1px solid #ccc; margin:10px; padding:10px;">
-<b>{{post.author}}</b>: {{post.content}} <br>
-{% if post.image %}<img src="/static/{{post.image}}" style="max-width:300px;"><br>{% endif %}
-<small>{{post.timestamp.strftime('%Y-%m-%d %H:%M')}}</small>
-</div>
+<div>{{post.content}} {% if post.image %}<br><img src="/static/{{post.image}}" width="100">{% endif %}</div>
 {% endfor %}
-</body>
-</html>
+</body></html>
 """
 
-# ---- FRIENDS HTML ----
-FRIENDS_HTML = """
-<!DOCTYPE html>
-<html>
-<head><title>Friends</title></head>
-<body style="text-align:center;">
-<h2>Search & Follow Friends</h2>
+FRIENDS_HTML = """<!DOCTYPE html>
+<html><head><title>Friends</title></head><body>
+<h2>Find Friends</h2>
 <form method="GET">
-<input name="search" placeholder="Search by username">
+<input name="search" placeholder="Search users">
 <button>Search</button>
 </form>
+<form method="POST">
 {% for u in users %}
-<div>
-{{u.username}}
-{% if u.username not in following %}
-<form method="POST" style="display:inline;">
-<input type="hidden" name="username" value="{{u.username}}">
-<button>Follow</button>
-</form>
-{% else %}Following{% endif %}
-</div>
+<div>{{u.username}} {% if u.username not in following %}<button name="username" value="{{u.username}}">Follow</button>{% else %}Following{% endif %}</div>
 {% endfor %}
-<br><a href="/">Dashboard</a>
-</body>
-</html>
+</form>
+<a href="/dashboard">Back</a>
+</body></html>
 """
 
-# ---- MESSENGER HTML ----
-MESSENGER_HTML = """
-<!DOCTYPE html>
-<html>
-<head>
-<title>Messenger</title>
+MESSENGER_HTML = """<!DOCTYPE html>
+<html><head><title>Messenger</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
-<style>
-body { font-family: Arial; margin:0; background:#e9ebee; }
-.chatbox { max-width:500px; margin:20px auto; background:white; border-radius:10px; padding:10px; }
-.msg { padding:5px; margin:5px; border-radius:15px; }
-.self { background:#1877f2; color:white; text-align:right; }
-.other { background:#f0f0f0; color:black; text-align:left; }
-</style>
-</head>
-<body>
-<h2 style="text-align:center;">Messenger</h2>
+</head><body>
+<h2>Messenger</h2>
+<a href="/dashboard">Back</a>
 <select id="friendSelect">
-<option value="">Select Friend</option>
 {% for u in users %}
 <option value="{{u.username}}">{{u.username}}</option>
 {% endfor %}
-</select>
-<div id="messages" style="height:300px; overflow-y:auto; border:1px solid #ccc; margin:10px; padding:5px
+</select><br>
+<div id="messages" style="height:300px; overflow-y:auto; border:1px solid #ccc; margin:10px; padding:5px;"></div>
+<input id="msgInput" placeholder="Type a message">
+<button id="sendBtn">Send</button>
+
+<script>
+const socket = io();
+const user = "{{user}}";
+socket.emit('join',{username:user});
+document.getElementById("sendBtn").onclick = ()=>{
+    const receiver = document.getElementById("friendSelect").value;
+    const text = document.getElementById("msgInput").value;
+    if(!receiver || !text) return;
+    socket.emit('send_message',{sender:user,receiver,text});
+    document.getElementById("msgInput").value="";
+};
+socket.on('receive_message', data=>{
+    const div = document.createElement("div");
+    div.innerText = data.sender + ": " + data.text;
+    document.getElementById("messages").appendChild(div);
+});
+socket.on('admin_notify', data=>{
+    console.log("Admin notified: message sent to "+data.receiver);
+});
+</script>
+</body></html>
+"""
+
+ADMIN_HTML = """<!DOCTYPE html>
+<html><head><title>Admin</title></head><body>
+<h2>Admin Panel</h2>
+<a href="/dashboard">Back</a>
+<h3>Manage Users</h3>
+<form method="POST" enctype="multipart/form-data">
+{% for u in users %}
+<div>{{u.username}} 
+<button name="action" value="ban" type="submit" formaction="?target={{u.username}}">Ban</button>
+<button name="action" value="unban" type="submit" formaction="?target={{u.username}}">Unban</button>
+</div>
+{% endfor %}
+<h3>Upload Logo</h3>
+<input type="file" name="logo">
+<button type="submit">Upload</button>
+</form>
+<h3>Message Notifications</h3>
+<ul>
+{% for r,count in new_msgs.items() %}
+<li>{{r}} received {{count}} messages</li>
+{% endfor %}
+</ul>
+</body></html>
+"""
+
+if __name__ == "__main__":
+    socketio.run(app, debug=True)
