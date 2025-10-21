@@ -204,3 +204,294 @@ DASHBOARD_HTML = "<h1>Loading dashboard...</h1>"
 
 if __name__ == "__main__":
     socketio.run(app, debug=True)
+# ================= PART 2 ===================
+# ================= ROUTES - DASHBOARD, PROFILE, ADMIN, MESSENGER ===================
+
+@app.route('/profile/<username>')
+def profile(username):
+    if 'user' not in session:
+        return redirect('/login')
+    user = User.query.filter_by(username=username).first()
+    if not user:
+        return "User not found."
+    posts = Post.query.filter_by(author=username).order_by(Post.timestamp.desc()).all()
+    current_user = User.query.filter_by(username=session['user']).first()
+    return render_template_string(PROFILE_HTML, profile_user=user, posts=posts, current_user=current_user)
+
+@app.route('/admin')
+def admin_page():
+    if 'user' not in session:
+        return redirect('/login')
+    current_user = User.query.filter_by(username=session['user']).first()
+    if not current_user.is_admin:
+        return "Access denied."
+    users = User.query.all()
+    messages = Message.query.order_by(Message.timestamp.desc()).all()
+    return render_template_string(ADMIN_HTML, users=users, messages=messages)
+
+@app.route('/messenger')
+def messenger_page():
+    if 'user' not in session:
+        return redirect('/login')
+    user = User.query.filter_by(username=session['user']).first()
+    friends = user.following.all() + user.followers.all()
+    friends = list({f.username:f for f in friends}.values())  # remove duplicates
+    return render_template_string(MESSENGER_HTML, user=user, friends=friends)
+
+@app.route('/send_message', methods=['POST'])
+def send_message():
+    if 'user' not in session:
+        return redirect('/login')
+    sender = session['user']
+    receiver = request.form['receiver']
+    text = request.form['text']
+    if not text or not receiver:
+        return redirect('/messenger')
+    msg = Message(sender=sender, receiver=receiver, text=text)
+    db.session.add(msg)
+    db.session.commit()
+    return redirect('/messenger')
+
+@app.route('/follow/<username>')
+def follow_user(username):
+    if 'user' not in session:
+        return redirect('/login')
+    current_user = User.query.filter_by(username=session['user']).first()
+    target_user = User.query.filter_by(username=username).first()
+    if target_user and target_user != current_user:
+        if not current_user.is_following(target_user):
+            current_user.following.append(target_user)
+            db.session.commit()
+    return redirect(url_for('profile', username=username))
+
+@app.route('/unfollow/<username>')
+def unfollow_user(username):
+    if 'user' not in session:
+        return redirect('/login')
+    current_user = User.query.filter_by(username=session['user']).first()
+    target_user = User.query.filter_by(username=username).first()
+    if target_user and current_user.is_following(target_user):
+        current_user.following.remove(target_user)
+        db.session.commit()
+    return redirect(url_for('profile', username=username))
+
+# ================= SOCKET.IO HANDLERS ===================
+@socketio.on('join')
+def handle_join(data):
+    username = data['username']
+    join_room(username)
+
+@socketio.on('send_message_socket')
+def handle_socket_message(data):
+    sender = data['sender']
+    receiver = data['receiver']
+    text = data['text']
+    msg = Message(sender=sender, receiver=receiver, text=text)
+    db.session.add(msg)
+    db.session.commit()
+    # Emit to both sender and receiver only
+    emit('receive_message', {'sender': sender, 'text': text}, room=receiver)
+    emit('receive_message', {'sender': sender, 'text': text}, room=sender)
+
+# ================= HELPER METHODS FOR FOLLOW ===================
+def is_following(self, user):
+    return self.following.filter(followers.c.followed_id==user.id).count() > 0
+
+User.is_following = is_following
+
+# ================= HTML TEMPLATES - PART 2 ===================
+
+DASHBOARD_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+<title>Dashboard - Chatternet</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+body{margin:0; font-family:Arial; background:#f0f2f5;}
+header{background:#1877f2; color:white; padding:15px; text-align:center; font-size:20px; position:sticky; top:0;}
+.container{max-width:800px; margin:20px auto; padding:10px;}
+.feed, .profile-section{background:white; border-radius:10px; padding:10px; margin-bottom:20px; box-shadow:0 0 5px rgba(0,0,0,0.2);}
+.post{border-bottom:1px solid #ccc; padding:10px;}
+button{background:#1877f2; color:white; border:none; padding:5px 10px; border-radius:5px; cursor:pointer;}
+button:hover{opacity:0.9;}
+a{color:#1877f2; text-decoration:none;}
+</style>
+</head>
+<body>
+<header>📘 Chatternet - Welcome {{user.username}}</header>
+<div class="container">
+{% if admin and admin.username == user.username %}
+<p><a href="/admin">Go to Admin Page</a></p>
+{% endif %}
+<p><a href="/messenger">Messenger</a> | <a href="/profile/{{user.username}}">My Profile</a> | <a href="/logout">Logout</a></p>
+
+<div class="feed">
+<h3>📝 What's on your mind?</h3>
+<form method="POST" action="/post" enctype="multipart/form-data">
+<textarea name="content" placeholder="Write something..." style="width:100%; height:60px;"></textarea><br>
+<input type="file" name="image">
+<br><button>Post</button>
+</form>
+<hr>
+{% for post in posts %}
+<div class="post">
+<b>{{post.author}}</b>: {{post.content}}<br>
+{% if post.image %}
+<img src="{{url_for('static', filename='uploads/' + post.image)}}" style="max-width:100%; border-radius:5px;"><br>
+{% endif %}
+<small>{{post.timestamp}}</small>
+</div>
+{% endfor %}
+</div>
+</div>
+</body>
+</html>
+"""
+
+PROFILE_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+<title>{{profile_user.username}} - Profile</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+body{margin:0; font-family:Arial; background:#f0f2f5;}
+header{background:#1877f2; color:white; padding:15px; text-align:center; font-size:20px;}
+.container{max-width:800px; margin:20px auto; padding:10px;}
+.feed{background:white; border-radius:10px; padding:10px; margin-bottom:20px; box-shadow:0 0 5px rgba(0,0,0,0.2);}
+.post{border-bottom:1px solid #ccc; padding:10px;}
+button{background:#1877f2; color:white; border:none; padding:5px 10px; border-radius:5px; cursor:pointer;}
+button:hover{opacity:0.9;}
+a{color:#1877f2; text-decoration:none;}
+</style>
+</head>
+<body>
+<header>{{profile_user.username}} - Profile</header>
+<div class="container">
+<p><a href="/dashboard">Back to Dashboard</a> | <a href="/messenger">Messenger</a></p>
+{% if current_user.username != profile_user.username %}
+{% if current_user.is_following(profile_user) %}
+<a href="/unfollow/{{profile_user.username}}"><button>Unfollow</button></a>
+{% else %}
+<a href="/follow/{{profile_user.username}}"><button>Follow</button></a>
+{% endif %}
+{% endif %}
+<div class="feed">
+<h3>Posts by {{profile_user.username}}</h3>
+{% for post in posts %}
+<div class="post">
+{{post.content}}<br>
+{% if post.image %}
+<img src="{{url_for('static', filename='uploads/' + post.image)}}" style="max-width:100%; border-radius:5px;"><br>
+{% endif %}
+<small>{{post.timestamp}}</small>
+</div>
+{% endfor %}
+</div>
+</div>
+</body>
+</html>
+"""
+
+ADMIN_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+<title>Admin Panel</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+body{margin:0; font-family:Arial; background:#f0f2f5;}
+header{background:#ff4d4d; color:white; padding:15px; text-align:center; font-size:20px;}
+.container{max-width:800px; margin:20px auto; padding:10px;}
+.user-list, .messages{background:white; border-radius:10px; padding:10px; margin-bottom:20px; box-shadow:0 0 5px rgba(0,0,0,0.2);}
+button{background:#ff4d4d; color:white; border:none; padding:5px 10px; border-radius:5px; cursor:pointer;}
+button:hover{opacity:0.9;}
+a{color:#1877f2; text-decoration:none;}
+</style>
+</head>
+<body>
+<header>Admin Panel</header>
+<div class="container">
+<p><a href="/dashboard">Back to Dashboard</a></p>
+<div class="user-list">
+<h3>Users</h3>
+{% for u in users %}
+<div>
+<b>{{u.username}}</b> | Email/Phone: {{u.email_or_phone}} | {% if u.banned %}BANNED{% else %}Active{% endif %}
+{% if not u.is_admin %}
+<a href="/ban/{{u.username}}"><button>Ban</button></a>
+{% endif %}
+</div>
+{% endfor %}
+</div>
+<div class="messages">
+<h3>Message Notifications</h3>
+{% for m in messages %}
+<div>{{m.sender}} sent a message to {{m.receiver}} at {{m.timestamp}}</div>
+{% endfor %}
+</div>
+</div>
+</body>
+</html>
+"""
+
+MESSENGER_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+<title>Messenger - Chatternet</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+<style>
+body{margin:0; font-family:Arial; background:#f0f2f5;}
+header{background:#1877f2; color:white; padding:15px; text-align:center; font-size:20px;}
+.container{max-width:800px; margin:20px auto; padding:10px;}
+.chatbox{background:white; border-radius:10px; padding:10px; box-shadow:0 0 5px rgba(0,0,0,0.2);}
+.msg{padding:5px; margin:5px; border-radius:15px;}
+.self{background:#1877f2; color:white; text-align:right;}
+.other{background:#f0f0f0; color:black; text-align:left;}
+select,input,button{padding:10px; margin:5px;}
+button{background:#1877f2; color:white; border:none; border-radius:5px; cursor:pointer;}
+button:hover{opacity:0.9;}
+</style>
+</head>
+<body>
+<header>Messenger - {{user.username}}</header>
+<div class="container">
+<p><a href="/dashboard">Dashboard</a> | <a href="/profile/{{user.username}}">My Profile</a></p>
+<div class="chatbox">
+<h4>💬 Chat</h4>
+<select id="friendSelect" style="width:100%;">
+{% for f in friends %}
+<option value="{{f.username}}">{{f.username}}</option>
+{% endfor %}
+</select>
+<div id="messages" style="height:300px; overflow-y:auto; border:1px solid #ccc; padding:5px;"></div>
+<input id="msgInput" placeholder="Type message..." style="width:70%;">
+<button id="sendBtn">Send</button>
+</div>
+</div>
+<script>
+const socket = io();
+const user = "{{user.username}}";
+socket.emit('join', {username:user});
+
+document.getElementById("sendBtn").onclick = () => {
+    const receiver = document.getElementById("friendSelect").value;
+    const text = document.getElementById("msgInput").value;
+    if(!receiver || !text) return;
+    socket.emit('send_message_socket', {sender:user, receiver, text});
+    document.getElementById("msgInput").value = "";
+};
+
+socket.on('receive_message', data=>{
+    const div = document.createElement("div");
+    div.className = "msg " + (data.sender===user ? "self":"other");
+    div.innerText = data.sender + ": " + data.text;
+    document.getElementById("messages").appendChild(div);
+});
+</script>
+</body>
+</html>
+"""
