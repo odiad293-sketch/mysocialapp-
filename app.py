@@ -242,6 +242,193 @@ a { text-decoration:none; color:#1877f2; }
 </html>
 """
 
+# ================= PROFILE_HTML =====================
+PROFILE_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+<title>{{ profile_user.username }}'s Profile - Chatternet</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+body { margin:0; font-family:Arial; background:#f0f2f5; }
+header { background:#1877f2; color:white; padding:15px; text-align:center; font-size:20px; }
+.container { max-width:600px; margin:20px auto; background:white; padding:15px; border-radius:10px; }
+.post { border-bottom:1px solid #ccc; padding:10px; }
+img.post-image { max-width:100%; border-radius:10px; margin-top:10px; }
+button { padding:8px 15px; margin:5px; border:none; border-radius:5px; background:#1877f2; color:white; font-weight:bold; }
+a { text-decoration:none; color:#1877f2; }
+</style>
+</head>
+<body>
+<header>{{ profile_user.username }}'s Profile</header>
+<div class="container">
+<h3>Posts</h3>
+{% for post in posts %}
+<div class="post">
+<p>{{ post.content }}</p>
+{% if post.image %}
+<img src="/static/uploads/{{ post.image }}" class="post-image">
+{% endif %}
+<small>{{ post.timestamp.strftime('%Y-%m-%d %H:%M') }}</small>
+</div>
+{% endfor %}
+<a href="/dashboard"><button>Back to Dashboard</button></a>
+</div>
+</body>
+</html>
+"""
+
+# ================= DASHBOARD_HTML =====================
+DASHBOARD_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+<title>Dashboard - Chatternet</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+body { margin:0; font-family:Arial; background:#f0f2f5; }
+header { background:#1877f2; color:white; padding:15px; text-align:center; font-size:20px; position:sticky; top:0; }
+.container { max-width:600px; margin:20px auto; background:white; padding:15px; border-radius:10px; }
+textarea { width:100%; height:60px; border-radius:5px; padding:10px; margin:5px 0; border:1px solid #ccc; }
+.post { border-bottom:1px solid #ccc; padding:10px; }
+img.post-image { max-width:100%; border-radius:10px; margin-top:10px; }
+button { padding:8px 15px; margin:5px; border:none; border-radius:5px; background:#1877f2; color:white; font-weight:bold; }
+a { text-decoration:none; color:#1877f2; }
+</style>
+</head>
+<body>
+<header>Welcome, {{ user.username }} | <a href="/logout" style="color:white;">Logout</a> | 
+<a href="/profile/{{ user.id }}" style="color:white;">Profile</a> | 
+<a href="/messenger" style="color:white;">Messenger</a> | 
+{% if user.is_admin %}<a href="/admin" style="color:white;">Admin</a>{% endif %}</header>
+
+<div class="container">
+<h3>Create a Post</h3>
+<form method="POST" action="/post" enctype="multipart/form-data">
+<textarea name="content" placeholder="What's on your mind?"></textarea><br>
+<input type="file" name="image"><br>
+<button type="submit">Post</button>
+</form>
+
+<h3>All Posts</h3>
+{% for post in posts %}
+<div class="post">
+<b>{{ post.author.username }}</b>: {{ post.content }}
+{% if post.image %}
+<img src="/static/uploads/{{ post.image }}" class="post-image">
+{% endif %}
+<small>{{ post.timestamp.strftime('%Y-%m-%d %H:%M') }}</small>
+</div>
+{% endfor %}
+</div>
+</body>
+</html>
+"""
+
+# ================= MESSENGER_HTML =====================
+MESSENGER_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+<title>Messenger - Chatternet</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+<style>
+body { margin:0; font-family:Arial; background:#f0f2f5; }
+header { background:#1877f2; color:white; padding:15px; text-align:center; font-size:20px; position:sticky; top:0; }
+.container { max-width:600px; margin:20px auto; background:white; padding:15px; border-radius:10px; }
+#messages { border:1px solid #ccc; height:300px; overflow-y:auto; padding:10px; margin-bottom:10px; border-radius:5px; background:#fafafa; }
+.msg { margin:5px; padding:8px; border-radius:15px; }
+.self { background:#1877f2; color:white; text-align:right; }
+.other { background:#ccc; color:black; text-align:left; }
+input { width:80%; padding:8px; border-radius:5px; border:1px solid #ccc; }
+button { padding:8px 15px; border:none; border-radius:5px; background:#1877f2; color:white; font-weight:bold; }
+</style>
+</head>
+<body>
+<header>Messenger - <a href="/dashboard" style="color:white;">Dashboard</a></header>
+<div class="container">
+<select id="friendSelect">
+<option value="">Select Friend</option>
+{% for u in users %}
+{% if u.id != user.id %}
+<option value="{{ u.id }}">{{ u.username }}</option>
+{% endif %}
+{% endfor %}
+</select>
+<div id="messages"></div>
+<input id="msgInput" placeholder="Type message...">
+<button id="sendBtn">Send</button>
+</div>
+
+<script>
+const socket = io();
+const user_id = {{ user.id }};
+socket.emit('join', {user_id:user_id});
+
+document.getElementById("sendBtn").onclick = () => {
+    const receiver_id = document.getElementById("friendSelect").value;
+    const text = document.getElementById("msgInput").value;
+    if(!receiver_id || !text) return;
+    socket.emit('send_message', {sender_id:user_id, receiver_id:receiver_id, text:text});
+    document.getElementById("msgInput").value="";
+};
+
+socket.on('receive_message', data=>{
+    const div = document.createElement("div");
+    div.className = "msg " + (data.sender==user_id?"self":"other");
+    div.innerText = data.sender + ": " + data.text;
+    document.getElementById("messages").appendChild(div);
+});
+</script>
+</body>
+</html>
+"""
+
+# ================= ADMIN_HTML =====================
+ADMIN_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+<title>Admin Panel - Chatternet</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+body { margin:0; font-family:Arial; background:#f0f2f5; }
+header { background:#27ae60; color:white; padding:15px; text-align:center; font-size:20px; position:sticky; top:0; }
+.container { max-width:600px; margin:20px auto; background:white; padding:15px; border-radius:10px; }
+.user { border-bottom:1px solid #ccc; padding:10px; display:flex; justify-content:space-between; align-items:center; }
+button { padding:5px 10px; border:none; border-radius:5px; background:#e74c3c; color:white; font-weight:bold; }
+.notifications { background:#fafafa; border:1px solid #ccc; padding:10px; border-radius:5px; margin-top:10px; }
+</style>
+</head>
+<body>
+<header>Admin Panel - <a href="/dashboard" style="color:white;">Dashboard</a></header>
+<div class="container">
+<h3>Users</h3>
+{% for u in users %}
+<div class="user">
+<span>{{ u.username }} ({{ u.email }})</span>
+<form method="POST" action="/ban_user">
+<input type="hidden" name="user_id" value="{{ u.id }}">
+<button type="submit">Ban</button>
+</form>
+</div>
+{% endfor %}
+<h3>Notifications</h3>
+<div class="notifications">
+{% for note in notifications %}
+<p>{{ note }}</p>
+{% endfor %}
+</div>
+<h3>Upload Logo</h3>
+<form method="POST" action="/upload_logo" enctype="multipart/form-data">
+<input type="file" name="logo">
+<button type="submit">Upload</button>
+</form>
+</div>
+</body>
+</html>
+"""
 
 if __name__ == "__main__":
     socketio.run(app, debug=True)
