@@ -1,181 +1,227 @@
-from flask import Flask, render_template_string, request, redirect, url_for, session
-import sqlite3, os
+from flask import Flask, render_template_string, request, redirect, session, jsonify
+from flask_sqlalchemy import SQLAlchemy
+from flask_socketio import SocketIO, emit, join_room
+from datetime import datetime
+import os
 
 app = Flask(__name__)
-app.secret_key = "chatternet_secret"
+app.secret_key = "chatternet_secret_key"
+app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///chatternet.db"
+db = SQLAlchemy(app)
+socketio = SocketIO(app)
 
-DB = "chatternet.db"
+# ================= DATABASE MODELS =================
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(50), unique=True, nullable=False)
+    password = db.Column(db.String(50), nullable=False)
 
-# ---------- Database ----------
-def init_db():
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-    c.execute("""CREATE TABLE IF NOT EXISTS users(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE,
-        password TEXT,
-        bio TEXT DEFAULT '',
-        photo TEXT DEFAULT ''
-    )""")
-    c.execute("""CREATE TABLE IF NOT EXISTS posts(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        content TEXT,
-        likes INTEGER DEFAULT 0,
-        FOREIGN KEY(user_id) REFERENCES users(id)
-    )""")
-    conn.commit()
-    conn.close()
+class Post(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    author = db.Column(db.String(50), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
-init_db()
+class Message(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    sender = db.Column(db.String(50), nullable=False)
+    receiver = db.Column(db.String(50), nullable=False)
+    text = db.Column(db.Text, nullable=False)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
-# ---------- Templates ----------
-base_html = """
+with app.app_context():
+    db.create_all()
+
+# ================== ROUTES =========================
+@app.route('/')
+def home():
+    if "user" not in session:
+        return redirect('/login')
+    posts = Post.query.order_by(Post.timestamp.desc()).all()
+    user = session["user"]
+    return render_template_string(DASHBOARD_HTML, posts=posts, user=user)
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        user = User.query.filter_by(username=username, password=password).first()
+        if user:
+            session['user'] = user.username
+            return redirect('/')
+        else:
+            return "Invalid credentials. Try again."
+    return render_template_string(LOGIN_HTML)
+
+@app.route('/signup', methods=['GET', 'POST'])
+def signup():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        if User.query.filter_by(username=username).first():
+            return "Username already exists."
+        new_user = User(username=username, password=password)
+        db.session.add(new_user)
+        db.session.commit()
+        return redirect('/login')
+    return render_template_string(SIGNUP_HTML)
+
+@app.route('/logout')
+def logout():
+    session.pop('user', None)
+    return redirect('/login')
+
+@app.route('/post', methods=['POST'])
+def post():
+    if "user" in session:
+        content = request.form['content']
+        new_post = Post(author=session["user"], content=content)
+        db.session.add(new_post)
+        db.session.commit()
+    return redirect('/')
+
+@app.route('/get_messages/<friend>')
+def get_messages(friend):
+    user = session.get("user")
+    if not user:
+        return jsonify([])
+    msgs = Message.query.filter(
+        ((Message.sender==user) & (Message.receiver==friend)) |
+        ((Message.sender==friend) & (Message.receiver==user))
+    ).order_by(Message.timestamp.asc()).all()
+    return jsonify([{"sender": m.sender, "text": m.text, "time": m.timestamp.strftime("%H:%M")} for m in msgs])
+
+# ================ SOCKET.IO HANDLERS ================
+@socketio.on('send_message')
+def handle_message(data):
+    sender = data['sender']
+    receiver = data['receiver']
+    text = data['text']
+    msg = Message(sender=sender, receiver=receiver, text=text)
+    db.session.add(msg)
+    db.session.commit()
+    emit('receive_message', {'sender': sender, 'text': text}, room=receiver)
+    emit('receive_message', {'sender': sender, 'text': text}, room=sender)
+
+@socketio.on('join')
+def on_join(data):
+    username = data['username']
+    join_room(username)
+
+# ================ HTML (INLINE TEMPLATE) ================
+LOGIN_HTML = """
 <!DOCTYPE html>
 <html>
 <head>
-<title>ChatterNet</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chatternet Login</title>
 <style>
-body {margin:0;font-family:Arial;background:#f0f2f5;}
-.topbar {background:#1877f2;color:white;padding:10px 15px;display:flex;align-items:center;}
-.logo {font-size:24px;font-weight:bold;}
-.container {display:flex;justify-content:center;margin-top:20px;}
-.card {background:white;padding:20px;border-radius:10px;box-shadow:0 0 5px rgba(0,0,0,0.1);}
-input,button {padding:8px;margin:5px;width:90%;}
-.btn {background:#1877f2;color:white;border:none;border-radius:5px;cursor:pointer;}
-.nav {background:white;padding:10px;display:flex;justify-content:space-around;position:fixed;bottom:0;left:0;right:0;border-top:1px solid #ccc;}
-a{text-decoration:none;color:#1877f2;}
+body { font-family: Arial; background:#e9ebee; text-align:center; }
+form { margin-top:100px; background:white; display:inline-block; padding:30px; border-radius:10px; }
+input { display:block; margin:10px auto; padding:10px; width:200px; }
+button { background:#1877f2; color:white; border:none; padding:10px 20px; border-radius:5px; }
 </style>
 </head>
 <body>
-<div class="topbar">
-  <div class="logo">🟦 ChatterNet</div>
-  {% if 'user' in session %}
-    <div style="margin-left:auto;">Welcome, {{session['user']}} | <a href="{{url_for('logout')}}" style="color:white;">Logout</a></div>
-  {% endif %}
-</div>
-
-<div class="container">
-  {% block body %}{% endblock %}
-</div>
+<h1>Welcome to Chatternet</h1>
+<form method="POST">
+<input name="username" placeholder="Username" required>
+<input type="password" name="password" placeholder="Password" required>
+<button>Login</button>
+<p>Don't have an account? <a href="/signup">Sign up</a></p>
+</form>
 </body>
 </html>
 """
 
-login_html = """
-<div class="card" style="width:300px;text-align:center;">
-  <h3>Login to ChatterNet</h3>
-  <form method="POST">
-    <input type="text" name="username" placeholder="Username" required><br>
-    <input type="password" name="password" placeholder="Password" required><br>
-    <button class="btn">Login</button>
-  </form>
-  <p>or <a href="{{url_for('register')}}">Create account</a></p>
-  {% if msg %}<p style="color:red;">{{msg}}</p>{% endif %}
-</div>
+SIGNUP_HTML = """
+<!DOCTYPE html>
+<html>
+<head><title>Signup</title></head>
+<body style="text-align:center; background:#f0f2f5;">
+<h2>Create your Chatternet account</h2>
+<form method="POST">
+<input name="username" placeholder="Username" required><br>
+<input type="password" name="password" placeholder="Password" required><br>
+<button>Sign Up</button>
+</form>
+<p><a href="/login">Already have an account?</a></p>
+</body>
+</html>
 """
 
-register_html = """
-<div class="card" style="width:300px;text-align:center;">
-  <h3>Create ChatterNet Account</h3>
-  <form method="POST">
-    <input type="text" name="username" placeholder="Username" required><br>
-    <input type="password" name="password" placeholder="Password" required><br>
-    <button class="btn">Register</button>
-  </form>
-  <p>Already have an account? <a href="{{url_for('login')}}">Login</a></p>
-  {% if msg %}<p style="color:red;">{{msg}}</p>{% endif %}
+DASHBOARD_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+<title>Chatternet</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+<style>
+body { font-family: Arial; margin:0; background:#e9ebee; }
+header { background:#1877f2; color:white; padding:10px; font-size:20px; text-align:center; }
+.feed { max-width:500px; margin:20px auto; background:white; border-radius:10px; padding:10px; }
+.post { border-bottom:1px solid #ccc; padding:10px; }
+.chatbox { position:fixed; bottom:0; right:0; width:300px; background:white; border-radius:10px 10px 0 0; }
+.msg { padding:5px; margin:5px; border-radius:15px; }
+.self { background:#1877f2; color:white; text-align:right; }
+.other { background:#f0f0f0; color:black; text-align:left; }
+</style>
+</head>
+<body>
+<header>📘 Chatternet</header>
+
+{% if user == 'Destiny' %}
+<div class="feed" style="border:2px solid #1877f2;">
+<h3>📌 Chatternet Staff Feed (Admin Destiny)</h3>
+<p>Welcome everyone to Chatternet Beta! Post freely, chat kindly and enjoy.</p>
 </div>
+{% endif %}
+
+<div class="feed">
+<h3>📝 What's on your mind, {{user}}?</h3>
+<form method="POST" action="/post">
+<textarea name="content" style="width:100%;height:60px;" placeholder="Write something..."></textarea><br>
+<button>Post</button>
+</form>
+{% for post in posts %}
+<div class="post"><b>{{post.author}}</b>: {{post.content}} <small>{{post.timestamp}}</small></div>
+{% endfor %}
+</div>
+
+<div class="chatbox" id="chatbox">
+<h4>💬 Messenger</h4>
+<select id="friendSelect" style="width:100%;"></select>
+<div id="messages" style="height:200px; overflow-y:auto;"></div>
+<input id="msgInput" placeholder="Type message..." style="width:80%;">
+<button id="sendBtn">Send</button>
+</div>
+
+<script>
+const socket = io();
+const user = "{{user}}";
+socket.emit('join', {username:user});
+
+async function loadFriends(){
+    const res = await fetch('/get_messages/' + user);
+    const users = await res.json();
+}
+document.getElementById("sendBtn").onclick = () => {
+    const receiver = document.getElementById("friendSelect").value;
+    const text = document.getElementById("msgInput").value;
+    if(!receiver || !text) return;
+    socket.emit('send_message', {sender:user, receiver, text});
+    document.getElementById("msgInput").value = "";
+};
+socket.on('receive_message', data => {
+    const div = document.createElement("div");
+    div.className = "msg " + (data.sender === user ? "self":"other");
+    div.innerText = data.sender + ": " + data.text;
+    document.getElementById("messages").appendChild(div);
+});
+</script>
+</body>
+</html>
 """
 
-home_html = """
-<div style="width:600px;">
-  <div class="card">
-    <form method="POST" action="{{url_for('post')}}">
-      <textarea name="content" rows="3" style="width:100%;" placeholder="What's on your mind?" required></textarea><br>
-      <button class="btn">Post</button>
-    </form>
-  </div>
-  <br>
-  {% for p in posts %}
-  <div class="card">
-    <b>{{p['username']}}</b><br>
-    <p>{{p['content']}}</p>
-    <small>❤️ {{p['likes']}} likes</small>
-  </div>
-  <br>
-  {% endfor %}
-</div>
-"""
-
-# ---------- Routes ----------
-@app.route("/")
-def index():
-    if 'user' in session:
-        return redirect(url_for('home'))
-    return redirect(url_for('login'))
-
-@app.route("/login", methods=["GET","POST"])
-def login():
-    msg=""
-    if request.method=="POST":
-        u,p=request.form['username'],request.form['password']
-        conn=sqlite3.connect(DB)
-        c=conn.cursor()
-        c.execute("SELECT * FROM users WHERE username=? AND password=?",(u,p))
-        user=c.fetchone()
-        conn.close()
-        if user:
-            session['user']=u
-            return redirect(url_for('home'))
-        else:
-            msg="Invalid login."
-    return render_template_string(login_html,base=base_html,msg=msg)
-
-@app.route("/register",methods=["GET","POST"])
-def register():
-    msg=""
-    if request.method=="POST":
-        u,p=request.form['username'],request.form['password']
-        try:
-            conn=sqlite3.connect(DB)
-            c=conn.cursor()
-            c.execute("INSERT INTO users(username,password) VALUES(?,?)",(u,p))
-            conn.commit()
-            conn.close()
-            return redirect(url_for('login'))
-        except:
-            msg="Username already exists."
-    return render_template_string(register_html,base=base_html,msg=msg)
-
-@app.route("/home")
-def home():
-    if 'user' not in session: return redirect(url_for('login'))
-    conn=sqlite3.connect(DB)
-    c=conn.cursor()
-    c.execute("SELECT posts.id, users.username, posts.content, posts.likes FROM posts JOIN users ON posts.user_id=users.id ORDER BY posts.id DESC")
-    posts=[{'id':r[0],'username':r[1],'content':r[2],'likes':r[3]} for r in c.fetchall()]
-    conn.close()
-    return render_template_string(home_html,base=base_html,posts=posts)
-
-@app.route("/post",methods=["POST"])
-def post():
-    if 'user' not in session: return redirect(url_for('login'))
-    content=request.form['content']
-    conn=sqlite3.connect(DB)
-    c=conn.cursor()
-    c.execute("SELECT id FROM users WHERE username=?",(session['user'],))
-    uid=c.fetchone()[0]
-    c.execute("INSERT INTO posts(user_id,content) VALUES(?,?)",(uid,content))
-    conn.commit()
-    conn.close()
-    return redirect(url_for('home'))
-
-@app.route("/logout")
-def logout():
-    session.pop('user',None)
-    return redirect(url_for('login'))
-
-if __name__=="__main__":
-    app.run(host="0.0.0.0",port=10000)
+if __name__ == "__main__":
+    socketio.run(app, debug=True)
